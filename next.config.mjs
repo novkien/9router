@@ -90,6 +90,10 @@ const nextConfig = {
       {
         source: "/v1",
         destination: "/api/v1"
+      },
+      {
+        source: "/comfyui/:path*",
+        destination: "http://127.0.0.1:8082/comfyui/:path*"
       }
     ];
   }
