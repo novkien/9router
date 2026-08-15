@@ -347,7 +347,23 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
 
   const fmt = resolveFormat(targetFormat, cleanModel, provider);
   const supportedLevels = getThinkingLevels(provider, cleanModel);
+  const preserveNativeQwenHigh =
+    fmt === "qwen" &&
+    !override &&
+    cfg.mode === "level" &&
+    cfg.level === "high" &&
+    typeof body.reasoning_effort === "string" &&
+    body.reasoning_effort.toLowerCase() === "high";
+
   stripAll(body);
+  if (preserveNativeQwenHigh) {
+    // Newer Qwen chat templates accept OpenAI-compatible reasoning_effort natively.
+    // Preserve an explicitly supplied high effort instead of rewriting it to the
+    // legacy enable_thinking/thinking_budget pair.
+    body.reasoning_effort = "high";
+    return body;
+  }
+
   applyFormat(fmt, body, cfg, caps, supportedLevels);
   return body;
 }
