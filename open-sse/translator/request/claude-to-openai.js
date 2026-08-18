@@ -160,9 +160,22 @@ function convertClaudeMessage(msg) {
     const parts = [];
     const toolCalls = [];
     const toolResults = [];
+    let reasoningContent = "";
 
     for (const block of msg.content) {
       switch (block.type) {
+        case CLAUDE_BLOCK.THINKING:
+          if (typeof block.thinking === "string" && block.thinking) {
+            reasoningContent += block.thinking;
+          }
+          break;
+
+        case CLAUDE_BLOCK.REDACTED_THINKING:
+          if (typeof block.data === "string" && block.data) {
+            reasoningContent += block.data;
+          }
+          break;
+
         case CLAUDE_BLOCK.TEXT:
           parts.push({ type: OPENAI_BLOCK.TEXT, text: block.text });
           break;
@@ -194,10 +207,47 @@ function convertClaudeMessage(msg) {
           if (typeof block.content === "string") {
             resultContent = block.content;
           } else if (Array.isArray(block.content)) {
-            resultContent = block.content
-              .filter(c => c.type === CLAUDE_BLOCK.TEXT)
-              .map(c => c.text)
-              .join("\n") || JSON.stringify(block.content);
+            // Claude Code returns screenshots and other images inside
+            // tool_result.content. Do not stringify those blocks: base64 in
+            // a JSON string is tokenized as ordinary text and can consume the
+            // entire context window. Preserve text and images as OpenAI
+            // multimodal content parts instead.
+            const resultParts = [];
+            for (const contentBlock of block.content) {
+              if (contentBlock?.type === CLAUDE_BLOCK.TEXT) {
+                if (typeof contentBlock.text === "string" && contentBlock.text) {
+                  resultParts.push({ type: OPENAI_BLOCK.TEXT, text: contentBlock.text });
+                }
+              } else if (contentBlock?.type === CLAUDE_BLOCK.IMAGE) {
+                const source = contentBlock.source;
+                if (source?.type === "base64" && source.data) {
+                  resultParts.push({
+                    type: OPENAI_BLOCK.IMAGE_URL,
+                    image_url: {
+                      url: encodeDataUri(source.media_type, source.data)
+                    }
+                  });
+                } else if (source?.type === "url" && source.url) {
+                  resultParts.push({
+                    type: OPENAI_BLOCK.IMAGE_URL,
+                    image_url: { url: source.url }
+                  });
+                }
+              } else {
+                // Keep unknown tool-result parts visible without allowing a
+                // known image block to fall back to raw JSON/base64 text.
+                const fallback = JSON.stringify(contentBlock);
+                if (fallback) {
+                  resultParts.push({ type: OPENAI_BLOCK.TEXT, text: fallback });
+                }
+              }
+            }
+
+            if (resultParts.length === 1 && resultParts[0].type === OPENAI_BLOCK.TEXT) {
+              resultContent = resultParts[0].text;
+            } else {
+              resultContent = resultParts;
+            }
           } else if (block.content) {
             resultContent = JSON.stringify(block.content);
           }
@@ -225,16 +275,21 @@ function convertClaudeMessage(msg) {
       if (parts.length > 0) {
         result.content = collapseTextParts(parts);
       }
+      if (reasoningContent) {
+        result.reasoning_content = reasoningContent;
+      }
       result.tool_calls = toolCalls;
       return result;
     }
 
     // Return content
-    if (parts.length > 0) {
-      return {
-        role,
-        content: collapseTextParts(parts)
-      };
+    if (parts.length > 0 || reasoningContent) {
+      const result = { role };
+      result.content = parts.length > 0 ? collapseTextParts(parts) : "";
+      if (reasoningContent && role === ROLE.ASSISTANT) {
+        result.reasoning_content = reasoningContent;
+      }
+      return result;
     }
     
     // Empty content array

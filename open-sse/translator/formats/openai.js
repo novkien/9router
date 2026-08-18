@@ -67,7 +67,7 @@ export function filterToOpenAIFormat(body, opts = {}) {
     // Always keep assistant messages with tool_calls
     if (msg.role === ROLE.ASSISTANT && msg.tool_calls) return true;
     
-    if (typeof msg.content === "string") return msg.content.trim() !== "";
+    if (typeof msg.content === "string") return msg.content.trim() !== "" || !!msg.reasoning_content;
     if (Array.isArray(msg.content)) {
       return msg.content.some(b => 
         (b.type === OPENAI_BLOCK.TEXT && b.text?.trim()) ||

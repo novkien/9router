@@ -39,9 +39,25 @@ describe("Claude Code CLI context → OpenAI", () => {
     expect(JSON.stringify(out)).toContain("step-by-step plan");
   });
 
-  // claude-to-openai.js:128 — redacted_thinking also dropped
-  // KNOWN BUG
-  it.fails("redacted_thinking block is not silently dropped", () => {
+  // claude-to-openai.js — thinking blocks map to OpenAI reasoning_content so
+  // reasoning survives multi-turn history through the OpenAI bridge (Qwen/llama.cpp).
+  it("assistant thinking block survives Claude→OpenAI via reasoning_content", () => {
+    const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
+      messages: [
+        { role: "assistant", content: [
+          { type: "thinking", thinking: "step-by-step plan", signature: "abc123" },
+          { type: "text", text: "done" },
+        ] },
+        { role: "user", content: "next" },
+      ],
+    });
+    const asst = out.messages.find((m) => m.role === "assistant");
+    expect(asst?.reasoning_content).toContain("step-by-step plan");
+    expect(asst?.content).toBe("done");
+  });
+
+  // claude-to-openai.js — redacted_thinking preserved through reasoning_content
+  it("redacted_thinking block is not silently dropped", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
       messages: [
         { role: "assistant", content: [
@@ -51,12 +67,47 @@ describe("Claude Code CLI context → OpenAI", () => {
         { role: "user", content: "go" },
       ],
     });
-    expect(JSON.stringify(out)).toContain("ENCRYPTED_BLOB");
+    const asst = out.messages.find((m) => m.role === "assistant");
+    expect(asst?.reasoning_content).toContain("ENCRYPTED_BLOB");
+    expect(asst?.content).toBe("answer");
   });
 
-  // claude-to-openai.js:155-173 — tool_result image block stringified into raw JSON
-  // KNOWN BUG
-  it.fails("tool_result image block is preserved", () => {
+  // thinking + tool_use on the same assistant message → both survive
+  it("thinking block survives alongside tool_calls", () => {
+    const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
+      messages: [
+        { role: "assistant", content: [
+          { type: "thinking", thinking: "need tool", signature: "abc123" },
+          { type: "tool_use", id: "call_1", name: "lookup", input: { q: "x" } },
+        ] },
+        { role: "user", content: [
+          { type: "tool_result", tool_use_id: "call_1", content: "res" },
+        ] },
+      ],
+    });
+    const asst = out.messages.find((m) => m.role === "assistant");
+    expect(asst?.reasoning_content).toContain("need tool");
+    expect(asst?.tool_calls?.[0]?.id).toBe("call_1");
+  });
+
+  // thinking-only assistant message (no text) → reasoning_content with empty content
+  it("thinking-only assistant message keeps reasoning_content", () => {
+    const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
+      messages: [
+        { role: "assistant", content: [
+          { type: "thinking", thinking: "just thinking", signature: "abc123" },
+        ] },
+        { role: "user", content: "next" },
+      ],
+    });
+    const asst = out.messages.find((m) => m.role === "assistant");
+    expect(asst?.reasoning_content).toContain("just thinking");
+    expect(asst?.content).toBe("");
+  });
+
+  // Claude Code puts Read/screenshot output inside tool_result.content. The
+  // image must remain an OpenAI image_url instead of becoming JSON text.
+  it("tool_result image block is preserved as multimodal content", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
       messages: [
         { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "screenshot", input: {} }] },
@@ -68,6 +119,11 @@ describe("Claude Code CLI context → OpenAI", () => {
       ],
     });
     const tool = out.messages.find((m) => m.role === "tool");
-    expect(tool?.content, "image turned into raw JSON").not.toMatch(/^\[/);
+    expect(tool?.content).toEqual([
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,IMG" },
+      },
+    ]);
   });
 });
