@@ -307,6 +307,21 @@ export function extractUsage(chunk) {
     });
   }
 
+  // llama.cpp streaming format: the final chunk carries `timings` instead of `usage`.
+  // {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"timings":{"cache_n":54,"prompt_n":4,"predicted_n":149,...}}
+  // prompt_n is the non-cached prompt portion; cache_n are cached prompt tokens
+  // (llama.cpp non-stream usage counts prompt_tokens = prompt_n + cache_n).
+  if (chunk.timings && typeof chunk.timings === "object" && typeof chunk.timings.prompt_n === "number") {
+    const promptTokens = (chunk.timings.prompt_n || 0) + (chunk.timings.cache_n || 0);
+    const completionTokens = chunk.timings.predicted_n || 0;
+    return normalizeUsage({
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+      cached_tokens: chunk.timings.cache_n || 0
+    });
+  }
+
   return null;
 }
 

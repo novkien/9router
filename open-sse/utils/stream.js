@@ -169,7 +169,7 @@ export function createSSEStream(options = {}) {
               }
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
-              if (isFinishChunk && !hasValidUsage(parsed.usage)) {
+              if (isFinishChunk && !hasValidUsage(usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
                 output = `data: ${JSON.stringify(parsed)}\n`;
@@ -318,13 +318,24 @@ export function createSSEStream(options = {}) {
 
             // Inject estimated usage if finish chunk has no valid usage
             const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
-            if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
+            if (state.finishReason && isFinishChunk && !hasValidUsage(state.usage) && totalContentLength > 0) {
               const estimated = estimateUsage(body, totalContentLength, sourceFormat);
               item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
               state.usage = estimated;
             } else if (state.finishReason && isFinishChunk && state.usage) {
+              // Convert OpenAI-shaped usage (normalized upstream usage) to Claude shape
+              // when the client speaks Claude format — filterUsageForFormat would
+              // otherwise strip prompt_tokens and leave an empty usage object.
+              const clientUsage = sourceFormat === FORMATS.CLAUDE && typeof state.usage.prompt_tokens === "number"
+                ? {
+                    input_tokens: state.usage.prompt_tokens - (state.usage.cached_tokens || 0) - (state.usage.cache_creation_input_tokens || 0),
+                    output_tokens: state.usage.completion_tokens || 0,
+                    ...(state.usage.cached_tokens ? { cache_read_input_tokens: state.usage.cached_tokens } : {}),
+                    ...(state.usage.cache_creation_input_tokens ? { cache_creation_input_tokens: state.usage.cache_creation_input_tokens } : {})
+                  }
+                : state.usage;
               // Add buffer and filter usage for client (but keep original in state.usage for logging)
-              const buffered = addBufferToUsage(state.usage);
+              const buffered = addBufferToUsage(clientUsage);
               item.usage = filterUsageForFormat(buffered, sourceFormat);
             }
 
