@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 // Claude thinking signature validation (ported from CLIProxyAPI internal/signature).
 // E-form: single-layer base64, decoded[0] == 0x12 (Claude marker).
 // R-form: double-layer base64, outer decoded[0] == 'E', inner decoded[0] == 0x12.
@@ -38,4 +40,16 @@ export function isValidClaudeSignature(rawSignature) {
   } catch {
     return false;
   }
+}
+
+// Generate a deterministic opaque signature for reasoning produced by a local
+// OpenAI-compatible upstream. It has the marker shape accepted by the Claude
+// replay validator, but is explicitly not an Anthropic signature.
+export function createLocalReplaySignature(messageId, model, blockIndex) {
+  const secret = process.env.CLAUDE_THINKING_REPLAY_SECRET ||
+    process.env.API_KEY_SECRET ||
+    "9router-local-thinking-replay-v1";
+  const material = `v1|${messageId || "message"}|${model || "model"}|${blockIndex}`;
+  const digest = crypto.createHmac("sha256", secret).update(material).digest();
+  return Buffer.concat([Buffer.from([CLAUDE_SIGNATURE_MARKER]), digest]).toString("base64");
 }
